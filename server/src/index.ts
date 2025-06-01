@@ -6,6 +6,7 @@ import runMigration from './db/migrate'
 import { createUserService } from './services/userService'
 import { createRoutes } from './routes'
 import { AppContext } from './types/context'
+import dashboardRoutes from './routes/dashboardRoutes'
 
 // Fastify 인스턴스 생성
 const fastify = Fastify({

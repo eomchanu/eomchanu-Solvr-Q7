@@ -1,152 +1,26 @@
 import React, { useEffect, useState } from "react";
-import Papa from "papaparse";
+import axios from "axios";
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend
 } from "recharts";
 
-// 데이터 타입
-interface RawRelease {
-    repo: string;
-    release_id: string;
-    tag_name: string;
-    release_name: string;
-    author: string;
-    created_at: string;
-    published_at: string;
-    is_draft: string;
-    is_prerelease: string;
-    body: string;
-    assets_count: string;
-    assets_names: string;
-    html_url: string;
-    published_weekday: string;
-    published_date: string;
-    published_year: string;
-    published_month: string;
-    published_week: string;
+// --- 서버 API 응답 타입 ---
+interface DashboardStats {
+    yearStats: { year: string; count: number }[];
+    monthStats: Record<string, { month: string; count: number }[]>;
+    allYears: string[];
+    weekdayStats: { weekday: string; count: number }[];
+    releaseTypeStats: { type: string; count: number }[];
+    top3Months: { month: string; count: number }[];
+    avgReleaseInterval: number;
 }
 
-function normalizeRow(row: any): RawRelease {
-    return {
-        repo: row.Repo,
-        release_id: row.ReleaseID,
-        tag_name: row.Tag,
-        release_name: row.ReleaseName,
-        author: row.Author,
-        created_at: row.CreatedAt,
-        published_at: row.PublishedAt,
-        is_draft: row.IsDraft,
-        is_prerelease: row.IsPrerelease,
-        body: row.Body,
-        assets_count: row.AssetsCount,
-        assets_names: row.AssetsNames,
-        html_url: row.HtmlUrl,
-        published_weekday: row.PublishedWeekday,
-        published_date: row.PublishedDate,
-        published_year: row.PublishedYear,
-        published_month: row.PublishedMonth,
-        published_week: row.PublishedWeek,
-    };
-}
-
+// --- 색상 팔레트 ---
 const COLORS = [
     "#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#D92B2B", "#8936FF", "#FFB3DD"
 ];
 
-// 주말 제외 필터 함수
-function excludeWeekend(data: RawRelease[]) {
-    return data.filter(
-        d => d.published_weekday !== "Saturday" && d.published_weekday !== "Sunday"
-    );
-}
-
-// 집계 함수들 (주말 제외 데이터 사용)
-function getYearStats(data: RawRelease[]) {
-    const filtered = excludeWeekend(data);
-    const byYear: Record<string, { year: string; count: number }> = {};
-    for (const d of filtered) {
-        if (!d.published_year) continue;
-        byYear[d.published_year] = byYear[d.published_year] || { year: d.published_year, count: 0 };
-        byYear[d.published_year].count += 1;
-    }
-    return Object.values(byYear).sort((a, b) => a.year.localeCompare(b.year));
-}
-
-function getMonthStats(data: RawRelease[], year: string) {
-    const filtered = excludeWeekend(data);
-    const byMonth: Record<string, { month: string; count: number }> = {};
-    for (const d of filtered) {
-        if (d.published_year !== year) continue;
-        const month = d.published_month.padStart(2, "0");
-        byMonth[month] = byMonth[month] || { month, count: 0 };
-        byMonth[month].count += 1;
-    }
-    return Array.from({ length: 12 }, (_, i) => {
-        const m = (i + 1).toString().padStart(2, "0");
-        return byMonth[m] || { month: m, count: 0 };
-    });
-}
-
-function getWeekdayStats(data: RawRelease[]) {
-    // 월~금만 집계
-    const filtered = excludeWeekend(data);
-    const byDay: Record<string, { weekday: string; count: number }> = {};
-    for (const d of filtered) {
-        if (!d.published_weekday) continue;
-        byDay[d.published_weekday] = byDay[d.published_weekday] || { weekday: d.published_weekday, count: 0 };
-        byDay[d.published_weekday].count += 1;
-    }
-    const order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-    return order.map(day => byDay[day] || { weekday: day, count: 0 });
-}
-
-function getReleaseTypeStats(data: RawRelease[]) {
-    const filtered = excludeWeekend(data);
-    let draft = 0, prerelease = 0, release = 0;
-    for (const d of filtered) {
-        if (d.is_draft === "true") draft += 1;
-        else if (d.is_prerelease === "true") prerelease += 1;
-        else release += 1;
-    }
-    return [
-        { type: "Draft", count: draft },
-        { type: "Prerelease", count: prerelease },
-        { type: "Release", count: release }
-    ];
-}
-
-function getAllTimeMonthTop3(data: RawRelease[]) {
-    const filtered = excludeWeekend(data);
-    const byMonth: Record<string, { month: string; count: number }> = {};
-    for (const d of filtered) {
-        if (!d.published_month) continue;
-        const m = d.published_month.padStart(2, "0");
-        byMonth[m] = byMonth[m] || { month: m, count: 0 };
-        byMonth[m].count += 1;
-    }
-    return Object.values(byMonth)
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 3);
-}
-
-function getAverageReleaseInterval(data: RawRelease[]) {
-    // 주말 제외
-    const filtered = excludeWeekend(data);
-    const publishedDates = filtered
-        .map(d => d.published_at)
-        .filter(Boolean)
-        .map(str => new Date(str).getTime())
-        .sort((a, b) => a - b);
-    if (publishedDates.length < 2) return 0;
-    let sum = 0;
-    for (let i = 1; i < publishedDates.length; ++i) {
-        sum += (publishedDates[i] - publishedDates[i - 1]);
-    }
-    const avgMs = sum / (publishedDates.length - 1);
-    return Math.round(avgMs / (1000 * 60 * 60 * 24));
-}
-
-// Card 컴포넌트
+// --- 카드 컴포넌트 ---
 function Card({ children }: { children: React.ReactNode }) {
     return (
         <div style={{
@@ -165,7 +39,7 @@ function Card({ children }: { children: React.ReactNode }) {
     );
 }
 
-// 차트 컴포넌트들 (카드 내부)
+// --- 바 차트 ---
 function SimpleBarChart({ data, dataKey, xKey, title, color }: {
     data: any[]; dataKey: string; xKey: string; title: string; color: string;
 }) {
@@ -177,12 +51,13 @@ function SimpleBarChart({ data, dataKey, xKey, title, color }: {
                 <XAxis dataKey={xKey} />
                 <YAxis allowDecimals={false} />
                 <Tooltip />
-                <Bar dataKey={dataKey} fill={color} radius={[8, 8, 0, 0]} />
+                <Bar dataKey={dataKey} fill={color} radius={[7, 7, 0, 0]} />
             </BarChart>
         </>
     );
 }
 
+// --- 파이 차트 ---
 function SimplePieChart({ data, dataKey, nameKey, title }: {
     data: any[]; dataKey: string; nameKey: string; title: string;
 }) {
@@ -198,7 +73,7 @@ function SimplePieChart({ data, dataKey, nameKey, title }: {
                     cy="50%"
                     outerRadius={75}
                 >
-                    {data.map((entry, idx) => (
+                    {data.map((_, idx) => (
                         <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
                     ))}
                 </Pie>
@@ -209,34 +84,30 @@ function SimplePieChart({ data, dataKey, nameKey, title }: {
     );
 }
 
-// --- 메인 대시보드 ---
+// --- 메인 대시보드 컴포넌트 ---
 function Dashboard() {
-    const [data, setData] = useState<RawRelease[]>([]);
+    const [stats, setStats] = useState<DashboardStats | null>(null);
+    const [selectedYear, setSelectedYear] = useState<string>("");
 
+    // 최초 로딩 시 전체 통계 fetch
     useEffect(() => {
-        fetch("/release-raw.csv")
-            .then(res => res.text())
-            .then(csv => {
-                Papa.parse(csv, {
-                    header: true,
-                    skipEmptyLines: true,
-                    complete: result => {
-                        const normalized = (result.data as any[]).map(normalizeRow);
-                        setData(normalized);
-                    }
-                });
+        axios.get<DashboardStats>("/api/dashboard/stats")
+            .then(res => {
+                setStats(res.data);
+                // 연도 선택 기본값: 최신 연도
+                if (res.data.allYears.length) {
+                    setSelectedYear(res.data.allYears[res.data.allYears.length - 1]);
+                }
             });
     }, []);
 
-    const yearList = Array.from(new Set(excludeWeekend(data).map(d => d.published_year)))
-        .filter(Boolean)
-        .sort((a, b) => a.localeCompare(b));
-    const [selectedYear, setSelectedYear] = useState("");
-    useEffect(() => {
-        if (yearList.length) setSelectedYear(yearList[yearList.length - 1]);
-    }, [yearList.length]);
-
-    const avgInterval = getAverageReleaseInterval(data);
+    if (!stats) {
+        return (
+            <div className="w-full flex justify-center items-center" style={{ minHeight: 480 }}>
+                <div className="text-xl text-neutral-600">통계 데이터를 불러오는 중...</div>
+            </div>
+        );
+    }
 
     return (
         <div style={{ background: "#f4f6fa", minHeight: "100vh", padding: "32px 0" }}>
@@ -248,13 +119,10 @@ function Dashboard() {
                         Release Tracker Dashboard
                     </div>
                     <div style={{ fontSize: 17, color: "#555", marginBottom: 16 }}>
-                        GitHub Release 통계를 한눈에 시각화합니다.<br />
-                        <span style={{ color: "#D92B2B", fontWeight: 500, fontSize: 14 }}>
-                            (모든 통계는 <b>주말 릴리즈를 제외</b>하고 집계합니다.)
-                        </span>
+                        GitHub Release 통계를 한눈에 시각화합니다.
                     </div>
                 </div>
-                {/* 카드 레이아웃: 2단 그리드, 자동 줄바꿈 */}
+                {/* 카드 그리드 레이아웃 */}
                 <div style={{
                     display: "grid",
                     gridTemplateColumns: "1fr 1fr",
@@ -263,7 +131,7 @@ function Dashboard() {
                 }}>
                     <Card>
                         <SimpleBarChart
-                            data={getYearStats(data)}
+                            data={stats.yearStats}
                             dataKey="count"
                             xKey="year"
                             title="연도별 릴리즈 수"
@@ -280,22 +148,22 @@ function Dashboard() {
                                 value={selectedYear}
                                 onChange={e => setSelectedYear(e.target.value)}
                             >
-                                {yearList.map(y => (
+                                {stats.allYears.map(y => (
                                     <option key={y} value={y}>{y}년</option>
                                 ))}
                             </select>
                         </div>
-                        <BarChart width={380} height={220} data={getMonthStats(data, selectedYear)}>
+                        <BarChart width={380} height={220} data={stats.monthStats[selectedYear] || []}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="month" />
                             <YAxis allowDecimals={false} />
                             <Tooltip />
-                            <Bar dataKey="count" fill="#00C49F" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="count" fill="#00C49F" radius={[7, 7, 0, 0]} />
                         </BarChart>
                     </Card>
                     <Card>
                         <SimplePieChart
-                            data={getWeekdayStats(data)}
+                            data={stats.weekdayStats}
                             dataKey="count"
                             nameKey="weekday"
                             title="요일별 릴리즈 비율"
@@ -303,7 +171,7 @@ function Dashboard() {
                     </Card>
                     <Card>
                         <SimplePieChart
-                            data={getReleaseTypeStats(data)}
+                            data={stats.releaseTypeStats}
                             dataKey="count"
                             nameKey="type"
                             title="릴리즈 유형별 비율 (Draft / Prerelease / Release)"
@@ -311,7 +179,7 @@ function Dashboard() {
                     </Card>
                     <Card>
                         <SimpleBarChart
-                            data={getAllTimeMonthTop3(data)}
+                            data={stats.top3Months}
                             dataKey="count"
                             xKey="month"
                             title="역대 릴리즈가 가장 많았던 월 TOP 3"
@@ -325,7 +193,7 @@ function Dashboard() {
                         }}>
                             <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>평균 릴리즈 간격</div>
                             <span style={{ fontSize: 34, color: "#0088FE", fontWeight: 900 }}>
-                                {avgInterval ? `${avgInterval}일` : "데이터 부족"}
+                                {stats.avgReleaseInterval ? `${stats.avgReleaseInterval}일` : "데이터 부족"}
                             </span>
                         </div>
                     </Card>
