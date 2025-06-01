@@ -7,7 +7,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "generate:reports": "ts-node scripts/release-analyze.ts",
+    "sync:reports": "pnpm run generate:reports && cp release-raw.csv ../client/public/release-raw.csv"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.1",
