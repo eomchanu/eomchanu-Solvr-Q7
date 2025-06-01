@@ -12,6 +12,9 @@ const HomePage = () => {
         <Link to="/users" className="btn btn-primary">
           유저 관리 시작하기
         </Link>
+        <Link to="/dashboard" className="btn btn-primary">
+          대시보드 바로가기
+        </Link>
         <a
           href="https://github.com/yourusername/fullstack-boilerplate"
           target="_blank"

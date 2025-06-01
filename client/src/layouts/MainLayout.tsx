@@ -24,6 +24,12 @@ const MainLayout = () => {
               >
                 유저 관리
               </Link>
+              <Link
+                to="/dashboard"
+                className="text-neutral-600 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium"
+              >
+                대시보드
+              </Link>
             </nav>
           </div>
         </div>
