@@ -2,7 +2,7 @@ import axios from "axios";
 import { createObjectCsvWriter } from "csv-writer";
 import { parseISO, getYear, getWeek, format, getDay } from "date-fns";
 
-// 타입 선언
+/** --- 타입 정의 --- */
 interface ReleaseAuthor {
   login: string;
 }
@@ -39,10 +39,16 @@ interface ReleaseInfo {
   html_url: string;
 }
 
-// Github Releases fetch
+/** --- 상수 선언 --- */
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const REPOS = [
+  "daangn/stackflow",
+  "daangn/seed-design"
+];
+const WEEKEND_DAYS = [0, 6]; // 0: 일요일, 6: 토요일
 
+/** --- 주어진 repo의 모든 Release 가져오기 --- */
 async function fetchAllReleases(repo: string): Promise<GithubRelease[]> {
   let releases: GithubRelease[] = [];
   let page = 1;
@@ -63,7 +69,7 @@ async function fetchAllReleases(repo: string): Promise<GithubRelease[]> {
   return releases;
 }
 
-// Release 데이터 구조화
+/** --- Github API Release 응답을 ReleaseInfo 형태로 변환 --- */
 function extractReleaseInfo(repo: string, raw: GithubRelease): ReleaseInfo {
   return {
     repo,
@@ -82,20 +88,20 @@ function extractReleaseInfo(repo: string, raw: GithubRelease): ReleaseInfo {
   };
 }
 
-// 평일(월~금)만 포함 여부 판단
+/** --- 평일(월~금)인지 판별 --- */
 function isWeekday(dateString: string): boolean {
   const day = getDay(parseISO(dateString));
-  return day !== 0 && day !== 6; // 0=일요일, 6=토요일
+  return !WEEKEND_DAYS.includes(day);
 }
 
-// 통계 정보 생성 (평일만)
+/** --- 연/주/일별 평일 릴리즈 통계 생성 --- */
 function makeStats(releases: ReleaseInfo[]) {
   const yearly: Record<string, number> = {};
   const weekly: Record<string, number> = {};
   const daily: Record<string, number> = {};
 
-  releases.forEach(r => {
-    if (!isWeekday(r.created_at)) return; // 주말은 제외
+  for (const r of releases) {
+    if (!isWeekday(r.created_at)) continue; // 평일만 포함
     const d = parseISO(r.created_at);
     const y = getYear(d);
     const w = getWeek(d);
@@ -103,11 +109,11 @@ function makeStats(releases: ReleaseInfo[]) {
     yearly[`${r.repo}__${y}`] = (yearly[`${r.repo}__${y}`] || 0) + 1;
     weekly[`${r.repo}__${y}-W${w}`] = (weekly[`${r.repo}__${y}-W${w}`] || 0) + 1;
     daily[`${r.repo}__${day}`] = (daily[`${r.repo}__${day}`] || 0) + 1;
-  });
+  }
   return { yearly, weekly, daily };
 }
 
-// 통계정보 CSV 저장 (repo > type > period 정렬)
+/** --- 통계 정보를 repo > type > period 순으로 정렬 후 CSV로 저장 --- */
 type StatRecord = { type: string; period: string; repo: string; count: number; };
 async function saveStatsCSV(stats: ReturnType<typeof makeStats>, filename: string) {
   const records: StatRecord[] = [];
@@ -143,52 +149,17 @@ async function saveStatsCSV(stats: ReturnType<typeof makeStats>, filename: strin
   console.log(`release-stats.csv 파일 생성됨`);
 }
 
-// 상세정보 CSV 저장 (선택, 필요시)
-async function saveReleasesCSV(releases: ReleaseInfo[], filename: string) {
-  releases.sort((a, b) => {
-    if (a.repo !== b.repo) return a.repo.localeCompare(b.repo);
-    return a.release_id - b.release_id;
-  });
-  const csvWriter = createObjectCsvWriter({
-    path: filename,
-    header: [
-      { id: "repo", title: "Repo" },
-      { id: "release_id", title: "ReleaseID" },
-      { id: "tag_name", title: "Tag" },
-      { id: "release_name", title: "ReleaseName" },
-      { id: "author", title: "Author" },
-      { id: "created_at", title: "CreatedAt" },
-      { id: "published_at", title: "PublishedAt" },
-      { id: "is_draft", title: "IsDraft" },
-      { id: "is_prerelease", title: "IsPrerelease" },
-      { id: "body", title: "Body" },
-      { id: "assets_count", title: "AssetsCount" },
-      { id: "assets_names", title: "AssetsNames" },
-      { id: "html_url", title: "HtmlUrl" }
-    ]
-  });
-  await csvWriter.writeRecords(releases);
-  console.log(`release-details.csv 파일 생성됨`);
-}
-
-// 메인 실행
-const REPOS = [
-  "daangn/stackflow",
-  "daangn/seed-design"
-];
-
+/** --- 메인 실행 --- */
 async function main() {
-  let allReleaseInfo: ReleaseInfo[] = [];
-  for (const repo of REPOS) {
-    const rawReleases = await fetchAllReleases(repo);
-    const infos = rawReleases.map(r => extractReleaseInfo(repo, r));
-    allReleaseInfo = allReleaseInfo.concat(infos);
+  // 모든 repo에 대해 병렬로 Release 데이터 가져오기
+  const allReleasesByRepo = await Promise.all(REPOS.map(fetchAllReleases));
+  // ReleaseInfo로 변환
+  const allReleaseInfo: ReleaseInfo[] = [];
+  for (let i = 0; i < REPOS.length; i++) {
+    allReleaseInfo.push(...allReleasesByRepo[i].map(r => extractReleaseInfo(REPOS[i], r)));
   }
 
-  // 상세정보 저장
-  // await saveReleasesCSV(allReleaseInfo, "release-details.csv");
-
-  // 평일 릴리즈만 포함하는 통계 CSV 생성
+  // 평일(월~금) 릴리즈만 포함하는 통계 CSV 생성
   const stats = makeStats(allReleaseInfo);
   await saveStatsCSV(stats, "release-stats.csv");
 }
