@@ -1,19 +1,15 @@
 import axios from "axios";
 import { createObjectCsvWriter } from "csv-writer";
-import { parseISO, getYear, getWeek, format } from "date-fns";
+import { parseISO, getYear, getWeek, format, getDay } from "date-fns";
 
-/** ================================
- * 1. 타입 선언
- * ================================ */
+// 타입 선언
 interface ReleaseAuthor {
   login: string;
 }
-
 interface ReleaseAsset {
   name: string;
   size: number;
 }
-
 interface GithubRelease {
   id: number;
   tag_name: string;
@@ -27,8 +23,6 @@ interface GithubRelease {
   assets: ReleaseAsset[];
   html_url: string;
 }
-
-/** 구조화된 릴리즈 정보 */
 interface ReleaseInfo {
   repo: string;
   release_id: number;
@@ -45,9 +39,7 @@ interface ReleaseInfo {
   html_url: string;
 }
 
-/** ================================
- * 2. 릴리즈 데이터 fetch 함수
- * ================================ */
+// Github Releases fetch
 const GITHUB_API = "https://api.github.com";
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
@@ -71,9 +63,7 @@ async function fetchAllReleases(repo: string): Promise<GithubRelease[]> {
   return releases;
 }
 
-/** ================================
- * 3. 릴리즈 데이터 가공 함수
- * ================================ */
+// Release 데이터 구조화
 function extractReleaseInfo(repo: string, raw: GithubRelease): ReleaseInfo {
   return {
     repo,
@@ -92,15 +82,20 @@ function extractReleaseInfo(repo: string, raw: GithubRelease): ReleaseInfo {
   };
 }
 
-/** ================================
- * 4. 통계 정보 가공 함수 (예시)
- * ================================ */
+// 평일(월~금)만 포함 여부 판단
+function isWeekday(dateString: string): boolean {
+  const day = getDay(parseISO(dateString));
+  return day !== 0 && day !== 6; // 0=일요일, 6=토요일
+}
+
+// 통계 정보 생성 (평일만)
 function makeStats(releases: ReleaseInfo[]) {
-  // 연, 주, 일 단위 배포수 (대시보드 차트용)
   const yearly: Record<string, number> = {};
   const weekly: Record<string, number> = {};
   const daily: Record<string, number> = {};
+
   releases.forEach(r => {
+    if (!isWeekday(r.created_at)) return; // 주말은 제외
     const d = parseISO(r.created_at);
     const y = getYear(d);
     const w = getWeek(d);
@@ -112,10 +107,48 @@ function makeStats(releases: ReleaseInfo[]) {
   return { yearly, weekly, daily };
 }
 
-/** ================================
- * 5. CSV 저장 함수
- * ================================ */
+// 통계정보 CSV 저장 (repo > type > period 정렬)
+type StatRecord = { type: string; period: string; repo: string; count: number; };
+async function saveStatsCSV(stats: ReturnType<typeof makeStats>, filename: string) {
+  const records: StatRecord[] = [];
+  for (const [k, v] of Object.entries(stats.yearly)) {
+    const [repo, period] = k.split("__");
+    records.push({ type: "Yearly", period, repo, count: v });
+  }
+  for (const [k, v] of Object.entries(stats.weekly)) {
+    const [repo, period] = k.split("__");
+    records.push({ type: "Weekly", period, repo, count: v });
+  }
+  for (const [k, v] of Object.entries(stats.daily)) {
+    const [repo, period] = k.split("__");
+    records.push({ type: "Daily", period, repo, count: v });
+  }
+
+  records.sort((a, b) => {
+    if (a.repo !== b.repo) return a.repo.localeCompare(b.repo);
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return a.period.localeCompare(b.period);
+  });
+
+  const csvWriter = createObjectCsvWriter({
+    path: filename,
+    header: [
+      { id: "repo", title: "Repo" },
+      { id: "type", title: "Type" },
+      { id: "period", title: "Period" },
+      { id: "count", title: "ReleaseCount" }
+    ]
+  });
+  await csvWriter.writeRecords(records);
+  console.log(`release-stats.csv 파일 생성됨`);
+}
+
+// 상세정보 CSV 저장 (선택, 필요시)
 async function saveReleasesCSV(releases: ReleaseInfo[], filename: string) {
+  releases.sort((a, b) => {
+    if (a.repo !== b.repo) return a.repo.localeCompare(b.repo);
+    return a.release_id - b.release_id;
+  });
   const csvWriter = createObjectCsvWriter({
     path: filename,
     header: [
@@ -135,12 +168,10 @@ async function saveReleasesCSV(releases: ReleaseInfo[], filename: string) {
     ]
   });
   await csvWriter.writeRecords(releases);
-  console.log(`>> 릴리즈 상세 CSV 파일 생성: ${filename}`);
+  console.log(`release-details.csv 파일 생성됨`);
 }
 
-/** ================================
- * 6. 메인 실행 로직
- * ================================ */
+// 메인 실행
 const REPOS = [
   "daangn/stackflow",
   "daangn/seed-design"
@@ -154,40 +185,15 @@ async function main() {
     allReleaseInfo = allReleaseInfo.concat(infos);
   }
 
-  // 릴리즈 상세 저장 (대시보드에 활용)
-  await saveReleasesCSV(allReleaseInfo, "release-details.csv");
+  // 상세정보 저장
+  // await saveReleasesCSV(allReleaseInfo, "release-details.csv");
 
-  // 통계 정보 예시 (별도 저장/대시보드)
+  // 평일 릴리즈만 포함하는 통계 CSV 생성
   const stats = makeStats(allReleaseInfo);
-  const statRecords: any[] = [];
-  for (const [k, v] of Object.entries(stats.yearly)) {
-    const [repo, period] = k.split("__");
-    statRecords.push({ type: "Yearly", period, repo, count: v });
-  }
-  for (const [k, v] of Object.entries(stats.weekly)) {
-    const [repo, period] = k.split("__");
-    statRecords.push({ type: "Weekly", period, repo, count: v });
-  }
-  for (const [k, v] of Object.entries(stats.daily)) {
-    const [repo, period] = k.split("__");
-    statRecords.push({ type: "Daily", period, repo, count: v });
-  }
-
-  const statCsvWriter = createObjectCsvWriter({
-    path: "release-stats.csv",
-    header: [
-      { id: "type", title: "Type" },
-      { id: "period", title: "Period" },
-      { id: "repo", title: "Repo" },
-      { id: "count", title: "ReleaseCount" }
-    ]
-  });
-  await statCsvWriter.writeRecords(statRecords);
-  console.log(">> 릴리즈 통계 CSV 파일 생성: release-stats.csv");
+  await saveStatsCSV(stats, "release-stats.csv");
 }
 
-// 스크립트 실행
 main().catch(e => {
-  console.error("메인 실행 중 오류:", e);
+  console.error("실행 중 오류:", e);
   process.exit(1);
 });
